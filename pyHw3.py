@@ -12,7 +12,11 @@ from operator import attrgetter
 import os
 import errno
 from pdb import set_trace as bp
+from IPython.core import debugger
 import json
+
+
+Idebug = debugger.Pdb().set_trace
 
 def script():
   dataTest = pd.DataFrame(pd.read_csv("hwk3data/EMGaussian.test", sep=' '))
@@ -22,7 +26,11 @@ def script():
 
   e = EM(True, dataTest, dataTrain)
   e._seed()
-  return e
+
+
+  d = e.debug()
+
+  return d
 
 # Centroids: self.train.sample(n=4).values
 # Labels : np.zeros(len(self.train))
@@ -125,44 +133,69 @@ class Kmeans():
         result.save(file)
 
 
+#Little Containers
+class Eupdates():
+  def __init__(self, Gamma, Nks):
+    self.gamma = Gamma #Nxk
+    self.Nks = Nks
+class Mupdates():
+  def __init__(self, Nks, Pi, Mu, Sigma):
+    self.Nks = Nks
+    self.Pi = Pi
+    self.Mu = Mu
+    self.Sigma = Sigma
+
 class EM():
   def __init__(self, IsoOrNot : bool, test, train, K=4, nbRestarts=10):
     self.IsoOrNot = IsoOrNot
     self.test = test
     self.train = train
+    self.X = self.train.values
     self.K = K
     self.N = len(self.train)
     self.upToN = range(len(self.train))
     self.KMeansResults = Kmeans(test,train, K, nbRestarts).best
 
+  def debug(self):
+    seed = self._seed()
+    eUpdate = self._responsabilities(seed.Pi, seed.Mu, seed.Sigma)
+    muNewtest = self._muNew(eUpdate)
+    piNewTest = self._piNew(eUpdate.Nks)
+    Idebug()
+
   def _seed(self):
+    groups = EM._groupByLabel(self.X, self.KMeansResults.labels, self.K)
     Mu = self.KMeansResults.centroids
-    groups = EM._groupByLabel(self.train.values, self.KMeansResults.labels, self.K)
-    Sigma = [map(np.std, group) for group in groups]
+    Sigma = [np.std(group)*np.identity(2) for group in groups]
     Nks = [len(group) for group in groups]
     Pi = [Nk/self.N for Nk in Nks]
 
-    return dict(Mu=Mu, Sigma=Sigma, Nks=Nks, Pi=Pi)
+    return Mupdates(Nks, Pi, Mu, Sigma)
 
-  def _responsabilities(self, X, Pi, Mu, Sigma):
+  def _responsabilities(self, Pi, Mu, Sigma):
     Normal = [multivariate_normal(mean=mu, cov=sig).pdf
               for mu,sig in zip(Mu,Sigma)]
-
-    Gamma_ = [[pi*normal(x) for pi,normal in zip(Pi,Normal)] for x in X]
-    Gamma = [[gamma/sum(row) for gamma in row] for row in _Gamma]
-    return np.array(Gamma)
+    Gamma_ = [[pi*normal(x) for pi,normal in zip(Pi,Normal)] for x in self.X]
+    Gamma = [[gamma/sum(row) for gamma in row] for row in Gamma_]
+    Nks = [sum([Gamma_nk for Gamma_nk in Gamma_k])
+                          for Gamma_k in np.array(Gamma).T]
+    return Eupdates(np.array(Gamma), Nks)
 
   def _piNew(self, Nks):
     return [Nk/self.N for Nk in Nks]
 
-  def _muNew(self, X, Nk, Gamma, Resp):
-   # muNew_ = list(np.einsum('ij,ij->j',Gamma, X))
-   # muNew = [mu_/Nk for (mu_,Nk) in zip(muNew_,Nk)]
+  def _muNew(self, Eupdates):
+    #The columns of Gamma are the list responsabilities of K for all the values
+    Gamma = Eupdates.gamma
+    Nks = Eupdates.Nks
+    muNew = [sum([Gamma_nk*x_n for Gamma_nk,x_n in zip(Gamma_k, self.X)])/Nk
+                               for Gamma_k,Nk in zip(list(Gamma.T),Nks)]
+    return muNew
 
-  def sigNewIso(self, X, Nk, Mu, Resp):
-    deviations = [[(xn - muk)**2 for muk in Mu] for xn in 
-  def sigNewGen(self, X, Nk, Mu, Resp):
-    pass
+ # def sigNewIso(self, X, Nk, Mu, Resp):
+ #   deviations = [[(xn - muk)**2 for muk in Mu] for xn in 
+ # def sigNewGen(self, X, Nk, Mu, Resp):
+ #   pass
 
   @staticmethod
   def _groupByLabel(values, labels, K):
