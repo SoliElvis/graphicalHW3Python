@@ -25,12 +25,10 @@ def script():
   k = 4
 
   e = EM(True, dataTest, dataTrain)
-  e._seed()
+  e.runAndPlotBoth(True)
 
 
-  d = e.debug()
-
-  return d
+  return e
 
 # Centroids: self.train.sample(n=4).values
 # Labels : np.zeros(len(self.train))
@@ -139,14 +137,14 @@ class Eupdates():
     self.gamma = Gamma #Nxk
     self.Nks = Nks
 class Mupdates():
-  def __init__(self, Nks, Pi, Mu, Sigma):
-    self.Nks = Nks
+  def __init__(self, Pi, Mu, Sigma):
     self.Pi = Pi
     self.Mu = Mu
     self.Sigma = Sigma
 
 class EM():
-  def __init__(self, IsoOrNot : bool, test, train, K=4, nbRestarts=10):
+  def __init__(self, IsoOrNot : bool, test, train, K=4, nbRestarts=3, nbIter=20):
+
     self.IsoOrNot = IsoOrNot
     self.test = test
     self.train = train
@@ -155,54 +153,142 @@ class EM():
     self.N = len(self.train)
     self.upToN = range(len(self.train))
     self.KMeansResults = Kmeans(test,train, K, nbRestarts).best
+    self.nbIter = nbIter
 
-  def debug(self):
-    seed = self._seed()
-    eUpdate = self._responsabilities(seed.Pi, seed.Mu, seed.Sigma)
-    muNewtest = self._muNew(eUpdate)
-    piNewTest = self._piNew(eUpdate.Nks)
-    Idebug()
+    self.D = 2
+  def runAndPlotBoth(self, interactive):
+    self.run(True,self.nbIter,1)
+    self.run(False,self.nbIter,2)
+    if (interactive):
+      plt.show()
+
+
+  def run(self, propToId, nbIter, figId):
+    mUpdate = self._seed()
+    for i in range(nbIter):
+      eUpdate = self._eUpdate(mUpdate)
+      mUpdate = self._mUpdate(eUpdate, propToId)
+
+    for k in range(self.K):
+      pi = mUpdate.Pi[k]
+      mu = mUpdate.Mu[:,k]
+      sig = mUpdate.Sigma[:,:,k]
+      fun = multivariate_normal(mean=mu,cov=sig).pdf
+      EM.plot(fun, figId, pi)
+
+    return mUpdate
 
   def _seed(self):
     groups = EM._groupByLabel(self.X, self.KMeansResults.labels, self.K)
-    Mu = self.KMeansResults.centroids
-    Sigma = [np.std(group)*np.identity(2) for group in groups]
+    Mu = self.KMeansResults.centroids.T
+    Sigma = np.swapaxes(np.array([np.std(group)*np.identity(2) for group in groups]),0,2)
+    Sigma_bad = np.swapaxes(np.array([5*np.identity(2) for i in range(4)]),0,2)
     Nks = [len(group) for group in groups]
     Pi = [Nk/self.N for Nk in Nks]
 
-    return Mupdates(Nks, Pi, Mu, Sigma)
+    return Mupdates(Pi, Mu, Sigma)
 
-  def _responsabilities(self, Pi, Mu, Sigma):
-    Normal = [multivariate_normal(mean=mu, cov=sig).pdf
-              for mu,sig in zip(Mu,Sigma)]
-    Gamma_ = [[pi*normal(x) for pi,normal in zip(Pi,Normal)] for x in self.X]
-    Gamma = [[gamma/sum(row) for gamma in row] for row in Gamma_]
-    Nks = [sum([Gamma_nk for Gamma_nk in Gamma_k])
-                          for Gamma_k in np.array(Gamma).T]
-    return Eupdates(np.array(Gamma), Nks)
+  def _eUpdate(self, mUpdate):
+
+    Pi = deepcopy(mUpdate.Pi)
+    Mu = deepcopy(mUpdate.Mu)
+    Sigma = deepcopy(mUpdate.Sigma)
+
+    Normal = list()
+    for k in range(self.K):
+      pdf = multivariate_normal(mean=Mu[:,k], cov=Sigma[:,:,k]).pdf
+      Normal.append(pdf)
+
+    Gamma_ = np.empty([self.N, self.K])
+    for k in range(self.K):
+      normal = Normal[k]
+      for i in range(self.N):
+        Gamma_[i,k] = Pi[k]*normal(self.X[i,:])
+
+    for i in range(self.N):
+      rowSum = np.sum(Gamma_[i,:])
+      for k in range(self.K):
+        Gamma_[i,k] = Gamma_[i,k]/rowSum
+
+    Nks = np.empty(self.K)
+    for k in range(self.K):
+      Nks[k] = np.sum(Gamma_[:,k])
+    return Eupdates(Gamma_, Nks)
+
+  def _mUpdate(self, eUpdate, propToId = True):
+    PiNew = self._piNew(eUpdate.Nks)
+    MuNew = self._muNew(eUpdate)
+    if (propToId):
+      SigNew = self._sigNewIso(eUpdate, MuNew)
+    else:
+      SigNew = self._sigNewGen(eUpdate, MuNew)
+    return Mupdates(PiNew, MuNew, SigNew)
 
   def _piNew(self, Nks):
     return [Nk/self.N for Nk in Nks]
 
   def _muNew(self, Eupdates):
-    #The columns of Gamma are the list responsabilities of K for all the values
     Gamma = Eupdates.gamma
     Nks = Eupdates.Nks
-    muNew = [sum([Gamma_nk*x_n for Gamma_nk,x_n in zip(Gamma_k, self.X)])/Nk
-                               for Gamma_k,Nk in zip(list(Gamma.T),Nks)]
+    muNew_ = np.empty([self.N,self.D,self.K])
+    muNew = np.empty([self.D, self.K])
+    for i in range(self.N):
+      for k in range(self.K):
+        muNew_[i,:,k] = self.X[i,:]*Gamma[i,k]
+
+    for k in range(self.K):
+      muNew[:,k] = np.sum(muNew_[:,:,k],axis=0)/Nks[k]
+
     return muNew
 
- # def sigNewIso(self, X, Nk, Mu, Resp):
- #   deviations = [[(xn - muk)**2 for muk in Mu] for xn in 
- # def sigNewGen(self, X, Nk, Mu, Resp):
- #   pass
+  def _sigNewIso(self, eUpdates, Mu):
+    Nks = eUpdates.Nks
+    sigma = np.empty([self.D, self.D, self.K])#DxDxK
+    deviations = np.empty([self.N, self.K])#NxDxK
+    wDeviations = np.empty([self.N, self.K])
+    Gamma = eUpdates.gamma
+
+    for i in range(self.N):
+      for k in range(self.K):
+        deviations[i,k] = lina.norm(self.X[i,:] - Mu[:,k])**2/Nks[k]
+        wDeviations[i,k] = deviations[i,k]*Gamma[i,k]
+
+    for k in range(self.K):
+      sigma[:,:,k] = np.sum(wDeviations[:,k])*np.identity(self.D)
+
+    return sigma
+
+  def _sigNewGen(self, eUpdates, Mu):
+    Nks = eUpdates.Nks
+    Gamma = eUpdates.gamma
+    sigma = np.empty([self.D,self.D,self.K])
+    sigma_ = np.empty([self.N,self.D,self.D,self.K])
+    for i in range(self.N):
+      for k in range(self.K):
+        dif = self.X[i,:] - Mu[:,k]
+        sigma_[i,:,:,k] = Gamma[i,k]*np.outer(dif,dif)/Nks[k]
+
+    for k in range(self.K):
+      sigma[:,:,k] = np.sum(sigma_[:,:,:,k],axis=0)
+
+    return sigma
 
   @staticmethod
   def _groupByLabel(values, labels, K):
     upToN = range(len(values))
     groups = [[values[j] for j in upToN if labels[j] == i] for i in range(K)]
     return groups
-
+  @staticmethod
+  def plot(fun, figId, pi=1):
+    X = np.linspace(-10,6,1000)
+    Y = np.linspace(-10,6,1000)
+    X,Y = np.meshgrid(X,Y)
+    pos = np.empty(X.shape + (2,))
+    pos[:, :, 0] = X
+    pos[:, :, 1] = Y
+    Z = pi*fun(pos)
+    plt.figure(figId)
+    plt.contour(X, Y, Z, 10 , cmap='RdGy');
 
 
 def dist(a, b, ax=1):
