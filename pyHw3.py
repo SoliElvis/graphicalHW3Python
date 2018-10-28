@@ -15,7 +15,6 @@ from pdb import set_trace as bp
 from IPython.core import debugger
 import json
 
-
 Idebug = debugger.Pdb().set_trace
 
 def script():
@@ -23,12 +22,10 @@ def script():
   dataTrain = pd.DataFrame(pd.read_csv("hwk3data/EMGaussian.train", sep=' '))
   nbRestarts = 10
   k = 4
-
-  e = EM(True, dataTest, dataTrain)
-  e.runAndPlotBoth(True)
-
-
-  return e
+  nbIter = 20
+  e = EM(dataTest, dataTrain,k,nbRestarts,nbIter)
+  interactive = True
+  e.runAndPlotBoth(interactive)
 
 # Centroids: self.train.sample(n=4).values
 # Labels : np.zeros(len(self.train))
@@ -102,7 +99,7 @@ class Kmeans():
     return K_Means_Results(centroids=C, labels=labels,
                            trainData=self.train, testData=self.test)
 
-  def plot(self, saveOrDisplay, directory=None):
+  def plot(self, saveOrDisplay, directory="./figs"):
     colors = ['r', 'g', 'b', 'y', 'c', 'm']
     values = self.train.values
     for figId, result in enumerate(self.results):
@@ -117,7 +114,6 @@ class Kmeans():
         ax.scatter(C[:, 0], C[:, 1], marker='*', s=200, c='#050505')
 
       if (saveOrDisplay == "save"):
-        dir = "./figs" if directory is None else directory
         fig.savefig(dir + '/K_means_fig' + str(figId))
 
     if (saveOrDisplay == "display"):
@@ -143,9 +139,8 @@ class Mupdates():
     self.Sigma = Sigma
 
 class EM():
-  def __init__(self, IsoOrNot : bool, test, train, K=4, nbRestarts=3, nbIter=20):
+  def __init__(self, test, train, K=4, nbRestarts=3, nbIter=10):
 
-    self.IsoOrNot = IsoOrNot
     self.test = test
     self.train = train
     self.X = self.train.values
@@ -157,26 +152,55 @@ class EM():
 
     self.D = 2
   def runAndPlotBoth(self, interactive):
-    self.run(True,self.nbIter,1)
-    self.run(False,self.nbIter,2)
+    mUpdate1 = self.run(True)
+    mUpdate2 = self.run(False)
+    self.plot(mUpdate1, 1, interactive)
+    self.plot(mUpdate2, 2, interactive)
     if (interactive):
       plt.show()
 
-
-  def run(self, propToId, nbIter, figId):
+  def run(self, propToId):
     mUpdate = self._seed()
-    for i in range(nbIter):
+    for i in range(self.nbIter):
       eUpdate = self._eUpdate(mUpdate)
       mUpdate = self._mUpdate(eUpdate, propToId)
+    return mUpdate
+
+  def plot(self, mUpdate, figId, interactive=True, directory="./figs"):
+    colors = ['r', 'g', 'b', 'y', 'c', 'm']
+    values = self.test.values
+    labels = self._label(mUpdate, values)
+    fig = plt.figure(figId)
+    ax = fig.add_subplot(111)
 
     for k in range(self.K):
       pi = mUpdate.Pi[k]
       mu = mUpdate.Mu[:,k]
       sig = mUpdate.Sigma[:,:,k]
       fun = multivariate_normal(mean=mu,cov=sig).pdf
-      EM.plot(fun, figId, pi)
+      EM._plotContours(fun, figId, pi)
 
-    return mUpdate
+      points = np.array([values[j] for j in range(len(values)) if labels[j] == k])
+      ax.scatter(points[:, 0], points[:, 1], s=7, c=colors[k])
+      ax.scatter(mu[0], mu[1], marker='*', s=200, c='#050505')
+
+    if (interactive):
+      plt.draw()
+    else:
+      fig.savefig(dir + '/EM_fig' + str(figId))
+
+  def _label(self, mUpdate, values):
+    labels = np.zeros(len(self.test))
+    funs = []
+    for k in range(self.K):
+      funs.append(multivariate_normal(mean=mUpdate.Mu[:,k],cov=mUpdate.Sigma[:,:,k]).pdf)
+
+    for i in range(len(values)):
+      pdfValues = [fun(values[i,:]) for fun in funs]
+      best = np.argmax(pdfValues)
+      labels[i] = best
+
+    return labels
 
   def _seed(self):
     groups = EM._groupByLabel(self.X, self.KMeansResults.labels, self.K)
@@ -185,14 +209,13 @@ class EM():
     Sigma_bad = np.swapaxes(np.array([5*np.identity(2) for i in range(4)]),0,2)
     Nks = [len(group) for group in groups]
     Pi = [Nk/self.N for Nk in Nks]
-
     return Mupdates(Pi, Mu, Sigma)
 
-  def _eUpdate(self, mUpdate):
-
-    Pi = deepcopy(mUpdate.Pi)
-    Mu = deepcopy(mUpdate.Mu)
-    Sigma = deepcopy(mUpdate.Sigma)
+  def _eUpdate(self, Mupdates):
+    mUpdate = deepcopy(Mupdates)
+    Pi = mUpdate.Pi
+    Mu = mUpdate.Mu
+    Sigma = mUpdate.Sigma
 
     Normal = list()
     for k in range(self.K):
@@ -215,21 +238,24 @@ class EM():
       Nks[k] = np.sum(Gamma_[:,k])
     return Eupdates(Gamma_, Nks)
 
-  def _mUpdate(self, eUpdate, propToId = True):
+  def _mUpdate(self, eUpdate, propToId):
     PiNew = self._piNew(eUpdate.Nks)
     MuNew = self._muNew(eUpdate)
-    if (propToId):
+    SigNew = None
+    if (propToId == True):
       SigNew = self._sigNewIso(eUpdate, MuNew)
-    else:
+    elif (propToId == False):
       SigNew = self._sigNewGen(eUpdate, MuNew)
+
     return Mupdates(PiNew, MuNew, SigNew)
 
   def _piNew(self, Nks):
     return [Nk/self.N for Nk in Nks]
 
   def _muNew(self, Eupdates):
-    Gamma = Eupdates.gamma
-    Nks = Eupdates.Nks
+    eUpdate = deepcopy(Eupdates)
+    Gamma = eUpdate.gamma
+    Nks = eUpdate.Nks
     muNew_ = np.empty([self.N,self.D,self.K])
     muNew = np.empty([self.D, self.K])
     for i in range(self.N):
@@ -244,17 +270,17 @@ class EM():
   def _sigNewIso(self, eUpdates, Mu):
     Nks = eUpdates.Nks
     sigma = np.empty([self.D, self.D, self.K])#DxDxK
-    deviations = np.empty([self.N, self.K])#NxDxK
+    deviations = np.empty([self.N, self.K])#NDxK
     wDeviations = np.empty([self.N, self.K])
     Gamma = eUpdates.gamma
 
-    for i in range(self.N):
-      for k in range(self.K):
-        deviations[i,k] = lina.norm(self.X[i,:] - Mu[:,k])**2/Nks[k]
-        wDeviations[i,k] = deviations[i,k]*Gamma[i,k]
+    for k in range(self.K):
+      for i in range(self.N):
+        deviations[i,k] = lina.norm(self.X[i,:] - Mu[:,k])/Nks[k]
+        wDeviations[i,k] = Gamma[i,k]*deviations[i,k]
 
     for k in range(self.K):
-      sigma[:,:,k] = np.sum(wDeviations[:,k])*np.identity(self.D)
+      sigma[:,:,k] = np.sum(wDeviations[:,k],axis=0)*np.identity(self.D)
 
     return sigma
 
@@ -273,13 +299,15 @@ class EM():
 
     return sigma
 
+
   @staticmethod
   def _groupByLabel(values, labels, K):
     upToN = range(len(values))
     groups = [[values[j] for j in upToN if labels[j] == i] for i in range(K)]
     return groups
+
   @staticmethod
-  def plot(fun, figId, pi=1):
+  def _plotContours(fun, figId, alpha_=0.5, pi=1):
     X = np.linspace(-10,6,1000)
     Y = np.linspace(-10,6,1000)
     X,Y = np.meshgrid(X,Y)
@@ -288,8 +316,7 @@ class EM():
     pos[:, :, 1] = Y
     Z = pi*fun(pos)
     plt.figure(figId)
-    plt.contour(X, Y, Z, 10 , cmap='RdGy');
-
+    plt.contourf(X, Y, Z, alpha=alpha_);
 
 def dist(a, b, ax=1):
   return lina.norm(a-b, axis=ax)
