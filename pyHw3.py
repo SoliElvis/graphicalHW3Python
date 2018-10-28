@@ -21,14 +21,14 @@ def script():
   dataTest = pd.DataFrame(pd.read_csv("hwk3data/EMGaussian.test", sep=' '))
   dataTrain = pd.DataFrame(pd.read_csv("hwk3data/EMGaussian.train", sep=' '))
   nbRestarts = 10
-  k = 4
+  K = 4
   nbIter = 20
-  e = EM(dataTest, dataTrain,k,nbRestarts,nbIter)
-  interactive = True
+  interactive = False
+  k = Kmeans(dataTest, dataTrain,K,nbRestarts)
+  k.plot(interactive)
+  e = EM(dataTest, dataTrain,k.best,K,nbRestarts,nbIter)
   e.runAndPlotBoth(interactive)
 
-# Centroids: self.train.sample(n=4).values
-# Labels : np.zeros(len(self.train))
 class K_Means_Results():
   def __init__(self, centroids, labels, trainData, testData, kmeansScore=None):
     self.centroids = centroids
@@ -50,7 +50,6 @@ class K_Means_Results():
   def save(self, file):
     data = {'Score' : self.kmeansScore, 'centroids' : self.centroids.tolist()}
     json.dump(data, file, indent=2)
-
 class Kmeans():
   def __init__(self, test, train, K=4, nbRestarts=10):
     self.K = K
@@ -99,11 +98,11 @@ class Kmeans():
     return K_Means_Results(centroids=C, labels=labels,
                            trainData=self.train, testData=self.test)
 
-  def plot(self, saveOrDisplay, directory="./figs"):
+  def plot(self, interactive=True, directory="./figs"):
     colors = ['r', 'g', 'b', 'y', 'c', 'm']
     values = self.train.values
     for figId, result in enumerate(self.results):
-      fig = plt.figure(figId)
+      fig = plt.figure(figId+10)
       ax = fig.add_subplot(111)
       C = result.centroids
 
@@ -113,10 +112,10 @@ class Kmeans():
         ax.scatter(points[:, 0], points[:, 1], s=7, c=colors[i])
         ax.scatter(C[:, 0], C[:, 1], marker='*', s=200, c='#050505')
 
-      if (saveOrDisplay == "save"):
-        fig.savefig(dir + '/K_means_fig' + str(figId))
+      if (not interactive):
+        fig.savefig(directory+ '/K_means_fig' + str(figId),format='svg')
 
-    if (saveOrDisplay == "display"):
+    if (interactive):
       plt.show()
 
   def saveResults(self, directory):
@@ -126,8 +125,6 @@ class Kmeans():
       for result in self.results:
         result.save(file)
 
-
-#Little Containers
 class Eupdates():
   def __init__(self, Gamma, Nks):
     self.gamma = Gamma #Nxk
@@ -137,23 +134,26 @@ class Mupdates():
     self.Pi = Pi
     self.Mu = Mu
     self.Sigma = Sigma
-
 class EM():
-  def __init__(self, test, train, K=4, nbRestarts=3, nbIter=10):
-
+  def __init__(self, test, train, KmeansResults=None, K=4, nbRestarts=3, nbIter=10):
     self.test = test
     self.train = train
+    self.D = 2
     self.X = self.train.values
     self.K = K
     self.N = len(self.train)
     self.upToN = range(len(self.train))
-    self.KMeansResults = Kmeans(test,train, K, nbRestarts).best
+
+    self.KMeansResults = (Kmeans(test,train, K, nbRestarts).best if KmeansResults is None
+                         else KmeansResults)
     self.nbIter = nbIter
 
-    self.D = 2
+    self.mUpdate1 = None
+    self.mUpdate2 = None
+
   def runAndPlotBoth(self, interactive):
-    mUpdate1 = self.run(True)
-    mUpdate2 = self.run(False)
+    mUpdate1 = self.run(True) if self.mUpdate1 is None else self.mUpdate1
+    mUpdate2 = self.run(False) if self.mUpdate2 is None else self.mUpdate2
     self.plot(mUpdate1, 1, interactive)
     self.plot(mUpdate2, 2, interactive)
     if (interactive):
@@ -178,16 +178,16 @@ class EM():
       mu = mUpdate.Mu[:,k]
       sig = mUpdate.Sigma[:,:,k]
       fun = multivariate_normal(mean=mu,cov=sig).pdf
-      EM._plotContours(fun, figId, pi)
 
+      EM._plotContours(fun, figId,colors[k], pi)
       points = np.array([values[j] for j in range(len(values)) if labels[j] == k])
-      ax.scatter(points[:, 0], points[:, 1], s=7, c=colors[k])
-      ax.scatter(mu[0], mu[1], marker='*', s=200, c='#050505')
+      ax.scatter(points[:, 0], points[:, 1],alpha=0.5, s=7, c=colors[k])
+      ax.scatter(mu[0], mu[1], marker='+', s=100, c='#050505')
 
     if (interactive):
       plt.draw()
     else:
-      fig.savefig(dir + '/EM_fig' + str(figId))
+      fig.savefig(directory + '/EM_fig' + str(figId),format='svg')
 
   def _label(self, mUpdate, values):
     labels = np.zeros(len(self.test))
@@ -299,7 +299,6 @@ class EM():
 
     return sigma
 
-
   @staticmethod
   def _groupByLabel(values, labels, K):
     upToN = range(len(values))
@@ -307,16 +306,16 @@ class EM():
     return groups
 
   @staticmethod
-  def _plotContours(fun, figId, alpha_=0.5, pi=1):
-    X = np.linspace(-10,6,1000)
-    Y = np.linspace(-10,6,1000)
+  def _plotContours(fun, figId, c, alpha_=0.2, pi=1):
+    X = np.linspace(-10,13,1000)
+    Y = np.linspace(-10,13,1000)
     X,Y = np.meshgrid(X,Y)
     pos = np.empty(X.shape + (2,))
     pos[:, :, 0] = X
     pos[:, :, 1] = Y
     Z = pi*fun(pos)
     plt.figure(figId)
-    plt.contourf(X, Y, Z, alpha=alpha_);
+    CS = plt.contour(X, Y, Z,levels=10, alpha=alpha_, colors = c)
 
 def dist(a, b, ax=1):
   return lina.norm(a-b, axis=ax)
